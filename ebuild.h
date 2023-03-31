@@ -60,35 +60,55 @@ int closedir(DIR *dirp);
 		}							\
 	} while(0)
 
-#define FOREACH_FILE_IN_DIR(file, dirpath, body)	\
-	do {						\
-		struct dirent *dp = NULL;		\
-		DIR *dir = opendir(dirpath);		\
-		while ((dp = readdir(dir))) {		\
-			const char *file = dp->d_name;	\
-			body;				\
-		}					\
-		closedir(dir);				\
+#define FOREACH_FILE_IN_DIR(file, dirpath, body)			\
+	do {								\
+		struct dirent *dp = NULL;				\
+		DIR *dir = opendir(dirpath);				\
+		while ((dp = readdir(dir))) {				\
+			const char *file = dp->d_name;			\
+			body;						\
+		}							\
+		closedir(dir);						\
 	} while(0)
 
 #define CMD(...) 							\
 	do {								\
-		printf("[INFO] %s\n", CONCAT_SEP(" ", __VA_ARGS__));	\
+		INFO(JOIN(" ", __VA_ARGS__));				\
 		cmd_impl(0, __VA_ARGS__, NULL);				\
 	} while(0)
 
 const char *concat_impl(int ignore, ...);
 const char *concat_sep_impl(const char *sep, ...);
+const char *build__join(const char *sep, ...);
+int ebuild__ends_with(const char *str, const char *postfix);
+int ebuild__is_dir(const char *path);
 void mkdirs_impl(int ignore, ...);
 void cmd_impl(int ignore, ...);
-void nobuild_exec(const char **argv);
+void ebuild_exec(const char **argv);
 const char *remove_ext(const char *path);
 char *shift(int *argc, char ***argv);
+void ebuild__rm(const char *path);
 
 #define CONCAT(...) concat_impl(0, __VA_ARGS__, NULL)
-#define CONCAT_SEP(sep, ...) concat_sep_impl(sep, __VA_ARGS__, NULL)
-#define PATH(...) CONCAT_SEP(PATH_SEP, __VA_ARGS__)
+#define CONCAT_SEP(sep, ...) build__deprecated_concat_sep(sep, __VA_ARGS__, NULL)
+#define JOIN(sep, ...) build__join(sep, __VA_ARGS__, NULL)
+#define PATH(...) JOIN(PATH_SEP, __VA_ARGS__)
 #define MKDIRS(...) mkdirs_impl(0, __VA_ARGS__, NULL)
+#define NOEXT(path) ebuild__remove_ext(path)
+#define ENDS_WITH(str, postfix) ebuild__ends_with(str, postfix)
+#define IS_DIR(path) ebuild__is_dir(path)
+#define RM(path)                                \
+    do {                                        \
+        INFO("rm %s", path);                    \
+        ebuild__rm(path);                      \
+    } while(0)
+
+void ebuild_log(FILE *stream, const char *tag, const char *fmt, ...);
+void ebuild_vlog(FILE *stream, const char *tag, const char *fmt, va_list args);
+
+void INFO(const char *fmt, ...);
+void WARN(const char *fmt, ...);
+void ERRO(const char *fmt, ...);
 
 #endif // EBUILD_H_
 
@@ -148,36 +168,39 @@ void closedir(DIR *dirp) {
 }
 #endif // _WIN32
 
-
-const char *concat_sep_impl(const char *sep, ...) {
+const char *build__join(const char *sep, ...) {
 	const size_t sep_len = strlen(sep);
 	size_t length = 0;
-	size_t seps_count = 0;
+    	size_t seps_count = 0;
 
-	va_list args;
-	FOREACH_VARGS(sep, arg, args, {
-		length += strlen(arg);
-		seps_count += 1;
-	});
+    	va_list args;
 
-	assert(length > 0);
-	seps_count -= 1;
-	char *result = malloc(length + seps_count * sep_len + 1);
+    	FOREACH_VARGS(sep, arg, args, {
+        	length += strlen(arg);
+        	seps_count += 1;
+    	});
+    	assert(length > 0);
 
-	length = 0;
-	FOREACH_VARGS(sep, arg, args, {
-		size_t n = strlen(arg);
-		memcpy(result + length, arg, n);
-		length += n;
+    	seps_count -= 1;
 
-		if (seps_count > 0) {
-			memcpy(result + length, sep, sep_len);
-			length += sep_len;
-			seps_count -= 1;
-		}
-	});
+    	char *result = malloc(length + seps_count * sep_len + 1);
 
-	return result;
+    	length = 0;
+    	FOREACH_VARGS(sep, arg, args, {
+        	size_t n = strlen(arg);
+        	memcpy(result + length, arg, n);
+        	length += n;
+
+        	if (seps_count > 0) {
+            		memcpy(result + length, sep, sep_len);
+            		length += sep_len;
+            		seps_count -= 1;
+        	}
+    	});
+
+    	result[length] = '\0';
+
+    	return result;
 }
 
 void mkdirs_impl(int ignore, ...) {
@@ -208,13 +231,12 @@ void mkdirs_impl(int ignore, ...) {
 
 		result[length] = '\0';
 
-		printf("[INFO] mkdir %s\n", result);
+		INFO("mkdirs %s", result);
 		if (mkdir(result, 0755) < 0) {
 			if (errno == EEXIST) {
-				fprintf(stderr, "[WARN] directory %s alredy exist\n",
-						result);
+				WARN("directory %s alredy exist", result);
 			} else {
-				fprintf(stderr, "[ERROR] could not create directory %s: %s\n",
+				ERRO("could not create directory %s: %s",
 						result, strerror(errno));
 				exit(1);
 			}
@@ -242,32 +264,28 @@ const char *concat_impl(int ignore, ...) {
 	return result;
 }
 
-void build_h_exec(const char **argv) {
+void ebuild_exec(const char **argv) {
 #ifdef _WIN32
 	intptr_t status = _spawnvp(_P_WAIT, argv[0], (char * const*) argv);
     	if (status < 0) {
-        	fprintf(stderr, "[ERROR] could not start child process: %s\n",
-                		strerror(errno));
+        	ERRO("could not start child process: %s", strerror(errno));
         	exit(1);
     	}
 
     	if (status > 0) {
-        	fprintf(stderr, "[ERROR] command exited with exit code %d\n",
-                		status);
+        	ERRO("command exited with exit code %d", status);
         	exit(1);
     	}
 #else
 	pid_t cpid = fork();
 	if (cpid == -1) {
-		fprintf(stderr, "[ERROR] could not fork a child process: %s\n",
-				strerror(errno));
+		ERRO("could not fork a child process: %s", strerror(errno));
 		exit(1);
 	}
 
 	if (cpid == 0) {
 		if (execvp(argv[0], (char * const*)argv) < 0) {
-			fprintf(stderr, "[ERROR] could not execute child process: %s\n",
-					strerror(errno));
+			ERRO("could not execute child process: %s", strerror(errno));
 			exit(1);
 		}
 	} else {
@@ -278,8 +296,7 @@ void build_h_exec(const char **argv) {
             		if (WIFEXITED(wstatus)) {
                 		int exit_status = WEXITSTATUS(wstatus);
                 		if (exit_status != 0) {
-                    			fprintf(stderr, "[ERROR] command exited with exit code %d\n",
-							exit_status);
+                    			ERRO("command exited with exit code %d", exit_status);
                     			exit(-1);
                 		}
 
@@ -287,8 +304,7 @@ void build_h_exec(const char **argv) {
             		}
 
             		if (WIFSIGNALED(wstatus)) {
-                		fprintf(stderr, "[ERROR] command process was terminated by signal %d\n",
-                        			WTERMSIG(wstatus));
+                		ERRO("command process was terminated by signal %d", WTERMSIG(wstatus));
                 		exit(-1);
             		}
         	}
@@ -312,10 +328,10 @@ void cmd_impl(int ignore, ...) {
 
 	assert(argc >= 1);
 
-	build_h_exec(argv);
+	ebuild_exec(argv);
 }
 
-const char *remove_ext(const char *path) {
+const char *ebuild__remove_ext(const char *path) {
 	size_t n = strlen(path);
     	while (n > 0 && path[n - 1] != '.') {
         	n -= 1;
@@ -340,4 +356,91 @@ char *shift(int *argc, char ***argv) {
 	return result;
 }
 
+void ebuild_log(FILE *stream, const char *tag, const char *fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	ebuild_vlog(stream, tag, fmt, args);
+	va_end(args);
+}
+
+void ebuild_vlog(FILE *stream, const char *tag, const char *fmt, va_list args) {
+	fprintf(stream, "[%s] ", tag);
+	vfprintf(stream, fmt, args);
+	fprintf(stream, "\n");
+}
+
+void INFO(const char *fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	ebuild_vlog(stdout, "INFO", fmt, args);
+	va_end(args);
+}
+
+void WARN(const char *fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	ebuild_vlog(stderr, "WARN", fmt, args);
+	va_end(args);
+}
+
+void ERRO(const char *fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	ebuild_vlog(stderr, "ERRO", fmt, args);
+	va_end(args);
+}
+
+int ebuild__ends_with(const char *str, const char *postfix) {
+    const size_t str_n = strlen(str);
+    const size_t postfix_n = strlen(postfix);
+    return postfix_n <= str_n && strcmp(str + str_n - postfix_n, postfix) == 0;
+}
+
+int ebuild__is_dir(const char *path) {
+#ifdef _WIN32
+    	DWORD dwAttrib = GetFileAttributes(path);
+
+    	return (dwAttrib != INVALID_FILE_ATTRIBUTES &&
+		(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+#else
+    	struct stat statbuf = {0};
+    	if (stat(path, &statbuf) < 0) {
+		if (errno == ENOENT) return 0;
+
+		ERRO("could not retrieve information about file %s: %s",
+	     		path, strerror(errno));
+		exit(1);
+    	}
+
+    	return (statbuf.st_mode & S_IFMT) == S_IFDIR;
+#endif // _WIN32
+}
+
+void ebuild__rm(const char *path) {
+    	if (IS_DIR(path)) {
+		FOREACH_FILE_IN_DIR(file, path, {
+	    		if (strcmp(file, ".") != 0 && strcmp(file, "..") != 0) {
+				ebuild__rm(PATH(path, file));
+	   	 	}
+		});
+
+		if (rmdir(path) < 0) {
+	    		if (errno = ENOENT) {
+				WARN("directory %s does not exist");
+	    		} else {
+				ERRO("could not remove directory %s: %s", path, strerror(errno));
+				exit(1);
+	    		}
+		}
+    	} else {
+		if (unlink(path) < 0) {
+	    		if (errno = ENOENT) {
+				WARN("file %s does not exist");
+	    		} else {
+				ERRO("could not remove file %s: %s", path, strerror(errno));
+				exit(1);
+	    		}
+		}
+    	}
+}
 #endif // EBUILD_IMPLEMENTAION
