@@ -85,7 +85,7 @@ int ebuild__is_dir(const char *path);
 void mkdirs_impl(int ignore, ...);
 void cmd_impl(int ignore, ...);
 void ebuild_exec(const char **argv);
-const char *remove_ext(const char *path);
+const char *ebuild__remove_ext(const char *path);
 char *shift(int *argc, char ***argv);
 void ebuild__rm(const char *path);
 
@@ -412,7 +412,7 @@ int ebuild__is_dir(const char *path) {
 		exit(1);
     	}
 
-    	return (statbuf.st_mode & S_IFMT) == S_IFDIR;
+    	return S_ISDIR(statbuf.st_mode);
 #endif // _WIN32
 }
 
@@ -425,7 +425,7 @@ void ebuild__rm(const char *path) {
 		});
 
 		if (rmdir(path) < 0) {
-	    		if (errno = ENOENT) {
+	    		if (errno == ENOENT) {
 				WARN("directory %s does not exist");
 	    		} else {
 				ERRO("could not remove directory %s: %s", path, strerror(errno));
@@ -434,7 +434,7 @@ void ebuild__rm(const char *path) {
 		}
     	} else {
 		if (unlink(path) < 0) {
-	    		if (errno = ENOENT) {
+	    		if (errno == ENOENT) {
 				WARN("file %s does not exist");
 	    		} else {
 				ERRO("could not remove file %s: %s", path, strerror(errno));
